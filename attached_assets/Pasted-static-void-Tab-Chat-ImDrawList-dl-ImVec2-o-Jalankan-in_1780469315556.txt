@@ -1,0 +1,203 @@
+static void Tab_Chat(ImDrawList* dl, ImVec2 o)
+{
+    // Jalankan inisialisasi thread utama sekali menggunakan POSIX pthreads yang aman
+    static bool is_thread_started = false;
+    if (!is_thread_started) {
+        pthread_t t;
+        pthread_create(&t, nullptr, ChatPollingThread, nullptr);
+        pthread_detach(t); // Berjalan aman di latar belakang
+        is_thread_started = true;
+    }
+
+    // Jalankan sistem JNI Keyboard bawaan Anda (Yargi)
+    PollPrompt();
+    char temp_buffer[512] = "";
+    if (ConsumePrompt(temp_buffer, sizeof(temp_buffer))) {
+        g_chatInput = temp_buffer; 
+    }
+
+    const float PAD = 10.f;
+    float chat_w = CONTENT_W - PAD * 2;
+    float chat_h = CONTENT_H - PAD * 2;
+
+    float x = o.x + PAD;
+    float y = o.y + PAD;
+
+    // --- 1. RENDER HEADER ---
+    SectionLabel(dl, x + 8.f, y + 10.f, "GRUP CHAT");
+
+    float right_align_x = x + chat_w - 200.f;
+    ImGui::SetCursorScreenPos({ right_align_x, y + 10.f });
+    
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.48f, 0.64f, 1.0f));
+    ImGui::Text("%d online", g_onlineUsers);
+    ImGui::PopStyleColor();
+
+    ImGui::SameLine(0, 15.f);
+
+    ImVec4 conn_color = g_connected ? ImVec4(0.25f, 0.88f, 0.53f, 1.0f) : ImVec4(0.94f, 0.33f, 0.33f, 1.0f);
+    ImGui::PushStyleColor(ImGuiCol_Text, conn_color);
+    ImGui::Text("%s", g_connected ? "TERHUBUNG" : "TERPUTUS");
+    ImGui::PopStyleColor();
+
+    // --- 2. RENDER AREA PESAN CHAT ---
+    float input_area_h = 75.f; 
+    float history_h = chat_h - 45.f - input_area_h;
+
+    ImGui::SetCursorScreenPos({ x + 8.f, y + 36.f });
+    
+    dl->AddRectFilled({ x + 4.f, y + 32.f }, { x + chat_w - 4.f, y + 32.f + history_h }, IM_COL32(14, 21, 36, 120), 12.f);
+    dl->AddRect({ x + 4.f, y + 32.f }, { x + chat_w - 4.f, y + 32.f + history_h }, IM_COL32(37, 99, 235, 30), 12.f, 0, 1.f);
+
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.f, 0.f, 0.f, 0.f)); 
+    ImGui::BeginChild("##msgs_server", { chat_w - 16.f, history_h - 10.f }, false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+    {
+        if (g_isLoading) {
+            ImGui::SetCursorScreenPos({ x + (chat_w * 0.5f) - 50.f, y + (history_h * 0.5f) });
+            ImGui::TextColored(ImVec4(0.35f, 0.48f, 0.64f, 1.0f), "Memuat pesan...");
+        }
+        else if (g_chatMessages.empty() && g_connected) {
+            ImGui::SetCursorScreenPos({ x + (chat_w * 0.5f) - 100.f, y + (history_h * 0.5f) });
+            ImGui::TextColored(ImVec4(0.35f, 0.48f, 0.64f, 0.5f), "Belum ada pesan. Mulai obrolan!");
+        } 
+        else {
+            // PENGGUNAAN MUTEX POSIX THREAD-SAFE SAAT RENDER
+            pthread_mutex_lock(&g_chatMutex);
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 10.f);
+
+            for (const auto& msg : g_chatMessages) {
+                bool isMe = (msg.userId == g_myUserId || msg.username == "You" || msg.username == "Kamu");
+                ImVec4 user_color = isMe ? ImVec4(0.23f, 0.51f, 0.96f, 1.0f) : getUserColor(msg.username);
+
+                ImGui::BeginGroup();
+                
+                float width = ImGui::GetContentRegionAvail().x;
+                float max_bubble_w = width * 0.7f; 
+                
+                ImVec2 text_size = ImGui::CalcTextSize(msg.message.c_str(), nullptr, false, max_bubble_w - 24.f);
+                float bubble_w = text_size.x + 24.f;
+                float bubble_h = text_size.y + 16.f;
+
+                float p_x = isMe ? (width - bubble_w - 40.f) : 40.f;
+                ImGui::SetCursorPosX(p_x);
+
+                ImVec2 p_min = ImGui::GetCursorScreenPos();
+                ImVec2 p_max = ImVec2(p_min.x + bubble_w, p_min.y + bubble_h);
+
+                ImU32 bg_color = isMe ? IM_COL32(37, 99, 235, 40) : IM_COL32(255, 255, 255, 12);
+                ImU32 border_col = isMe ? IM_COL32(37, 99, 235, 80) : IM_COL32(255, 255, 255, 25);
+                
+                ImDrawCornerFlags corner_flags = ImDrawCornerFlags_All;
+                if (isMe) {
+                    corner_flags &= ~ImDrawCornerFlags_TopRight; 
+                } else {
+                    corner_flags &= ~ImDrawCornerFlags_TopLeft;  
+                }
+                dl->AddRectFilled(p_min, p_max, bg_color, 12.f, corner_flags);
+                dl->AddRect(p_min, p_max, border_col, 12.f, corner_flags, 1.f);
+
+                ImGui::SetCursorScreenPos({ p_min.x + 12.f, p_min.y + 8.f });
+                ImGui::PushTextWrapPos(p_min.x + bubble_w - 12.f);
+                ImGui::TextWrapped("%s", msg.message.c_str());
+                ImGui::PopTextWrapPos();
+
+                float header_y = p_min.y - 18.f;
+                float header_x = isMe ? (p_max.x - ImGui::CalcTextSize("Kamu").x) : p_min.x;
+                ImGui::SetCursorScreenPos({ header_x, header_y });
+
+                ImGui::PushStyleColor(ImGuiCol_Text, user_color);
+                ImGui::Text("%s", isMe ? "Kamu" : msg.username.c_str());
+                ImGui::PopStyleColor();
+
+                ImGui::SameLine();
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.48f, 0.64f, 1.0f));
+                ImGui::Text("%s", msg.time.c_str());
+                ImGui::PopStyleColor();
+
+                ImVec2 avatar_center = isMe ? ImVec2(p_max.x + 18.f, p_min.y + 14.f) : ImVec2(p_min.x - 18.f, p_min.y + 14.f);
+                ImU32 av_bg = isMe ? IM_COL32(37, 99, 235, 50) : IM_COL32(255, 255, 255, 15);
+                ImU32 av_border = isMe ? IM_COL32(37, 99, 235, 120) : IM_COL32(255, 255, 255, 30);
+                
+                dl->AddCircleFilled(avatar_center, 14.f, av_bg);
+                dl->AddCircle(avatar_center, 14.f, av_border, 0, 1.f);
+
+                char first_char = toupper(msg.username[0]);
+                char char_str[2] = { first_char, '\0' };
+                ImVec2 char_size = ImGui::CalcTextSize(char_str);
+                dl->AddText({ avatar_center.x - char_size.x * 0.5f, avatar_center.y - char_size.y * 0.5f }, 
+                    isMe ? IM_COL32(147, 197, 253, 255) : IM_COL32(255, 255, 255, 255), char_str);
+
+                ImGui::EndGroup();
+                
+                ImGui::SetCursorScreenPos({ p_min.x, p_max.y + 24.f });
+            }
+            pthread_mutex_unlock(&g_chatMutex); // UNLOCK
+        }
+
+        if (g_scrollToBottom) {
+            ImGui::SetScrollHereY(1.0f);
+            g_scrollToBottom = false;
+        }
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+
+    // --- 3. RENDER INPUT AREA ---
+    float input_y = y + history_h + 38.f;
+    ImGui::SetCursorScreenPos({ x + 4.f, input_y });
+
+    if (ImGui::Button("Paste", ImVec2(70, 26.f))) {
+        auto key = getClipboardText();
+        g_chatInput = key; 
+    }
+
+    ImGui::SameLine();
+
+    if (ImGui::Button("Type", ImVec2(70, 26.f))) {
+        OpenPrompt("Grup Chat", "Tulis pesan Anda di sini...");
+    }
+
+    ImGui::SameLine();
+
+    ImGui::PushItemWidth(chat_w - 238.f);
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.08f, 0.12f, 0.20f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.23f, 0.51f, 0.96f, 0.30f));
+    
+    std::string placeholder = g_connected ? "Ketik pesan..." : "Menghubungkan...";
+    
+    char input_temp_buf[256];
+    strncpy(input_temp_buf, g_chatInput.c_str(), sizeof(input_temp_buf) - 1);
+    input_temp_buf[sizeof(input_temp_buf) - 1] = '\0';
+
+    if (!g_connected) ImGui::BeginDisabled(); 
+
+    ImGui::InputTextWithHint("##input_server", placeholder.c_str(), input_temp_buf, sizeof(input_temp_buf), ImGuiInputTextFlags_ReadOnly);
+    
+    if (ImGui::IsItemClicked()) {
+        OpenPrompt("Grup Chat", "Tulis pesan Anda di sini...");
+    }
+    
+    if (!g_connected) ImGui::EndDisabled();
+    
+    ImGui::PopStyleColor(2);
+    ImGui::PopItemWidth();
+
+    ImGui::SameLine();
+
+    bool is_send_disabled = !g_connected || g_chatInput.empty();
+    if (is_send_disabled) ImGui::BeginDisabled();
+    
+    // PEMBUATAN THREAD POSIX YANG SANGAT AMAN UNTUK PENGIRIMAN PESAN (BEBAS ERROR DI AIDE)
+    if (ImGui::Button(XorStr("Send").c_str(), ImVec2(80.f, 26.f))) {
+        pthread_t t;
+        pthread_create(&t, nullptr, SendMessagesThread, nullptr);
+        pthread_detach(t); 
+    }
+    
+    if (is_send_disabled) ImGui::EndDisabled();
+
+    ImGui::SetCursorScreenPos({ x + chat_w - 180.f, input_y + 30.f });
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.48f, 0.64f, 1.0f));
+    ImGui::Text("%d/500 · Enter untuk kirim", (int)g_chatInput.length());
+    ImGui::PopStyleColor();
+}
