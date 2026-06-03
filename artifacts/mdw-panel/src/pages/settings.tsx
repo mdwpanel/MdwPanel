@@ -3,7 +3,7 @@ import { useGetInviteCode, useUpdateInviteCode } from "@workspace/api-client-rea
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Settings, KeyRound, Copy, CheckCheck, RefreshCw } from "lucide-react";
+import { Settings, KeyRound, Copy, CheckCheck, RefreshCw, Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
@@ -22,6 +22,18 @@ function randomCode() {
 export default function SettingsPage() {
   const { toast } = useToast();
   const [copied, setCopied] = useState(false);
+  const [tokenCopied, setTokenCopied] = useState(false);
+  const [showToken, setShowToken] = useState(false);
+
+  const token = localStorage.getItem("mdw_token") ?? "";
+
+  const copyToken = () => {
+    if (!token) return;
+    navigator.clipboard.writeText(token);
+    setTokenCopied(true);
+    toast({ title: "Token berhasil dicopy!" });
+    setTimeout(() => setTokenCopied(false), 2000);
+  };
 
   const { data, isLoading, refetch } = useGetInviteCode();
   const updateMutation = useUpdateInviteCode();
@@ -141,6 +153,55 @@ export default function SettingsPage() {
             </p>
           </div>
         )}
+      </div>
+
+      <div className="glass-panel rounded-xl p-6 neon-border max-w-lg">
+        <div className="flex items-center gap-2 mb-5">
+          <Terminal size={18} className="text-primary" />
+          <h2 className="font-mono font-bold text-foreground tracking-wide">TOKEN AKSES</h2>
+        </div>
+        <p className="text-muted-foreground font-mono text-xs mb-5 leading-relaxed">
+          Token ini digunakan untuk mengakses API MDW Panel, termasuk untuk program C++ atau integrasi eksternal lainnya.
+          Jangan bagikan token ke orang lain.
+        </p>
+
+        <div className="space-y-3">
+          <div className="relative">
+            <div className="w-full font-mono text-xs bg-background/50 border border-primary/30 rounded-md px-3 py-3 text-primary/80 break-all select-all leading-relaxed">
+              {showToken
+                ? (token || "Tidak ada token — silakan login ulang")
+                : "•".repeat(Math.min(token.length, 60))}
+            </div>
+          </div>
+
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              onClick={copyToken}
+              disabled={!token}
+              className="font-mono text-xs bg-primary text-primary-foreground hover:bg-primary/90 neon-border flex items-center gap-2"
+            >
+              {tokenCopied
+                ? <><CheckCheck size={14} /> TERCOPY!</>
+                : <><Copy size={14} /> COPY TOKEN</>}
+            </Button>
+
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setShowToken((v) => !v)}
+              className="font-mono text-xs border-primary/30 text-muted-foreground hover:text-primary hover:border-primary/60"
+            >
+              {showToken ? "SEMBUNYIKAN" : "TAMPILKAN"}
+            </Button>
+          </div>
+        </div>
+
+        <div className="mt-4 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30">
+          <p className="font-mono text-xs text-amber-400">
+            ⚠ Token berlaku 7 hari. Jika expired, login ulang untuk mendapatkan token baru.
+          </p>
+        </div>
       </div>
     </div>
   );
