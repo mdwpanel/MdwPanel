@@ -1,4 +1,4 @@
-import { pgTable, serial, text, boolean, timestamp, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, boolean, timestamp, integer, pgEnum } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -11,6 +11,8 @@ export const usersTable = pgTable("users", {
   passwordHash: text("password_hash").notNull(),
   role: roleEnum("role").notNull().default("user"),
   banned: boolean("banned").notNull().default(false),
+  profanityCount: integer("profanity_count").notNull().default(0),
+  frozenUntil: timestamp("frozen_until"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

@@ -3,21 +3,14 @@ import { useGetChatMessages, useSendChatMessage } from "@workspace/api-client-re
 import type { ChatMessage } from "@workspace/api-client-react";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
-import { MessageSquare, Send, Users, Wifi, WifiOff } from "lucide-react";
+import { MessageSquare, Send, Users, Wifi, WifiOff, Trash2, ShieldOff, Shield } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 
 const USER_COLORS = [
-  "text-cyan-400",
-  "text-violet-400",
-  "text-emerald-400",
-  "text-amber-400",
-  "text-rose-400",
-  "text-sky-400",
-  "text-fuchsia-400",
-  "text-lime-400",
-  "text-orange-400",
-  "text-pink-400",
+  "text-cyan-400","text-violet-400","text-emerald-400","text-amber-400",
+  "text-rose-400","text-sky-400","text-fuchsia-400","text-lime-400",
+  "text-orange-400","text-pink-400",
 ];
 
 function getUserColor(username: string) {
@@ -30,13 +23,19 @@ function formatTime(iso: string) {
   return new Date(iso).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
 }
 
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+
 export default function ChatPage() {
   const { user } = useAuth();
   const { toast } = useToast();
+  const isAdmin = user?.role === "admin";
+
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [online, setOnline] = useState(0);
   const [connected, setConnected] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const [mutingLoading, setMutingLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const esRef = useRef<EventSource | null>(null);
   const sendMutation = useSendChatMessage();
@@ -51,21 +50,22 @@ export default function ChatPage() {
     setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
   }, []);
 
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages, scrollToBottom]);
+  useEffect(() => { scrollToBottom(); }, [messages, scrollToBottom]);
 
   useEffect(() => {
     const token = localStorage.getItem("mdw_token");
     if (!token) return;
 
-    const base = import.meta.env.BASE_URL.replace(/\/$/, "");
-    const url = `${base}/api/chat/stream?token=${encodeURIComponent(token)}`;
+    const url = `${BASE}/api/chat/stream?token=${encodeURIComponent(token)}`;
     const es = new EventSource(url);
     esRef.current = es;
 
-    es.addEventListener("connected", () => {
+    es.addEventListener("connected", (e) => {
       setConnected(true);
+      try {
+        const d = JSON.parse(e.data);
+        if (typeof d.muted === "boolean") setMuted(d.muted);
+      } catch { /* ignore */ }
     });
 
     es.addEventListener("message", (e) => {
@@ -75,29 +75,26 @@ export default function ChatPage() {
           setOnline(data.count);
         } else if (data.type === "chat") {
           const msg: ChatMessage = {
-            id: data.id,
-            userId: data.userId,
-            username: data.username,
-            message: data.message,
-            createdAt: data.createdAt,
+            id: data.id, userId: data.userId, username: data.username,
+            message: data.message, createdAt: data.createdAt,
           };
           setMessages((prev) => {
             if (prev.find((m) => m.id === msg.id)) return prev;
             return [...prev, msg];
           });
+        } else if (data.type === "message_deleted") {
+          setMessages((prev) => prev.filter((m) => m.id !== data.id));
+        } else if (data.type === "chat_muted") {
+          setMuted(data.muted);
+          toast({
+            title: data.muted ? "⛔ Chat dinonaktifkan oleh admin" : "✅ Chat diaktifkan kembali",
+          });
         }
-      } catch { /* ignore parse errors */ }
+      } catch { /* ignore */ }
     });
 
-    es.onerror = () => {
-      setConnected(false);
-    };
-
-    return () => {
-      es.close();
-      esRef.current = null;
-      setConnected(false);
-    };
+    es.onerror = () => setConnected(false);
+    return () => { es.close(); esRef.current = null; setConnected(false); };
   }, []);
 
   const handleSend = () => {
@@ -107,8 +104,9 @@ export default function ChatPage() {
     sendMutation.mutate(
       { data: { message: text } },
       {
-        onError: () => {
-          toast({ title: "Gagal mengirim pesan", variant: "destructive" });
+        onError: (err: any) => {
+          const msg = err?.response?.data?.error ?? "Gagal mengirim pesan";
+          toast({ title: msg, variant: "destructive" });
           setInput(text);
         },
       }
@@ -118,6 +116,38 @@ export default function ChatPage() {
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
   };
+
+  const handleDelete = async (id: number) => {
+    try {
+      const token = localStorage.getItem("mdw_token");
+      await fetch(`${BASE}/api/chat/messages/${id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } catch {
+      toast({ title: "Gagal menghapus pesan", variant: "destructive" });
+    }
+  };
+
+  const handleToggleMute = async () => {
+    setMutingLoading(true);
+    try {
+      const token = localStorage.getItem("mdw_token");
+      const r = await fetch(`${BASE}/api/chat/mute`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await r.json();
+      setMuted(data.muted);
+      toast({ title: data.muted ? "⛔ Chat dinonaktifkan" : "✅ Chat diaktifkan" });
+    } catch {
+      toast({ title: "Gagal mengubah status chat", variant: "destructive" });
+    } finally {
+      setMutingLoading(false);
+    }
+  };
+
+  const canSend = connected && !sendMutation.isPending && (isAdmin || !muted);
 
   return (
     <div className="flex flex-col h-[calc(100vh-140px)] max-h-[800px]">
@@ -130,10 +160,27 @@ export default function ChatPage() {
             <p className="text-muted-foreground font-mono text-xs">Chat real-time dengan semua user</p>
           </div>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
+          {/* Mute toggle — admin only */}
+          {isAdmin && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleToggleMute}
+              disabled={mutingLoading}
+              className={`font-mono text-xs flex items-center gap-1.5 ${
+                muted
+                  ? "border-red-500/40 text-red-400 hover:bg-red-500/10"
+                  : "border-primary/30 text-muted-foreground hover:text-primary hover:border-primary/60"
+              }`}
+            >
+              {muted ? <ShieldOff size={13} /> : <Shield size={13} />}
+              {muted ? "AKTIFKAN CHAT" : "NONAKTIFKAN CHAT"}
+            </Button>
+          )}
+
           <div className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
-            <Users size={13} />
-            <span>{online} online</span>
+            <Users size={13} /><span>{online} online</span>
           </div>
           <div className={`flex items-center gap-1.5 font-mono text-xs ${connected ? "text-emerald-400" : "text-red-400"}`}>
             {connected ? <Wifi size={13} /> : <WifiOff size={13} />}
@@ -142,6 +189,19 @@ export default function ChatPage() {
         </div>
       </div>
 
+      {/* Mute banner */}
+      {muted && (
+        <div className={`mb-3 px-4 py-2 rounded-lg border font-mono text-xs flex-shrink-0 ${
+          isAdmin
+            ? "bg-amber-500/10 border-amber-500/30 text-amber-400"
+            : "bg-red-500/10 border-red-500/30 text-red-400"
+        }`}>
+          {isAdmin
+            ? "⛔ Chat sedang dinonaktifkan. Hanya admin yang bisa mengirim pesan."
+            : "⛔ Chat dinonaktifkan oleh admin. Anda tidak bisa mengirim pesan saat ini."}
+        </div>
+      )}
+
       {/* Message area */}
       <div className="flex-1 glass-panel rounded-xl border border-primary/20 overflow-y-auto p-4 space-y-3 min-h-0">
         {isLoading && (
@@ -149,19 +209,17 @@ export default function ChatPage() {
             Memuat pesan...
           </div>
         )}
-
         {!isLoading && messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground font-mono text-sm gap-2">
             <MessageSquare size={32} className="opacity-20" />
             <p>Belum ada pesan. Mulai obrolan!</p>
           </div>
         )}
-
         {messages.map((msg) => {
           const isMe = msg.userId === user?.id;
           const color = getUserColor(msg.username);
           return (
-            <div key={msg.id} className={`flex gap-2 ${isMe ? "flex-row-reverse" : "flex-row"}`}>
+            <div key={msg.id} className={`flex gap-2 group ${isMe ? "flex-row-reverse" : "flex-row"}`}>
               <div className={`flex-shrink-0 w-7 h-7 rounded-full border flex items-center justify-center text-xs font-bold font-mono ${
                 isMe ? "bg-primary/20 border-primary/50 text-primary" : "bg-white/5 border-white/10 " + color
               }`}>
@@ -173,6 +231,16 @@ export default function ChatPage() {
                     {isMe ? "Kamu" : msg.username}
                   </span>
                   <span className="text-muted-foreground font-mono text-[10px]">{formatTime(msg.createdAt)}</span>
+                  {/* Delete button — admin only */}
+                  {isAdmin && (
+                    <button
+                      onClick={() => handleDelete(msg.id)}
+                      className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 text-red-400/60 hover:text-red-400 rounded"
+                      title="Hapus pesan"
+                    >
+                      <Trash2 size={11} />
+                    </button>
+                  )}
                 </div>
                 <div className={`px-3 py-2 rounded-xl text-sm font-mono break-words ${
                   isMe
@@ -194,14 +262,18 @@ export default function ChatPage() {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={connected ? "Ketik pesan..." : "Menghubungkan..."}
-          disabled={!connected || sendMutation.isPending}
+          placeholder={
+            !connected ? "Menghubungkan..." :
+            muted && !isAdmin ? "Chat dinonaktifkan oleh admin..." :
+            "Ketik pesan..."
+          }
+          disabled={!canSend}
           maxLength={500}
           className="font-mono bg-background/50 border-primary/30 focus:border-primary focus:ring-primary/20 flex-1"
         />
         <Button
           onClick={handleSend}
-          disabled={!input.trim() || !connected || sendMutation.isPending}
+          disabled={!input.trim() || !canSend}
           className="font-mono bg-primary text-primary-foreground hover:bg-primary/90 neon-border px-4"
         >
           {sendMutation.isPending ? (
