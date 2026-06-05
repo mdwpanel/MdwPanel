@@ -3,7 +3,7 @@ import { useGetChatMessages, useSendChatMessage } from "@workspace/api-client-re
 import type { ChatMessage } from "@workspace/api-client-react";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
-import { MessageSquare, Send, Users, Wifi, WifiOff, Trash2, ShieldOff, Shield } from "lucide-react";
+import { MessageSquare, Send, Users, Wifi, WifiOff, Trash2, ShieldOff, Shield, Crown } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 
@@ -23,6 +23,11 @@ function formatTime(iso: string) {
   return new Date(iso).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
 }
 
+// Extend ChatMessage tipe lokal supaya bisa pakai userRole
+interface ChatMsg extends ChatMessage {
+  userRole?: string;
+}
+
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 export default function ChatPage() {
@@ -30,20 +35,19 @@ export default function ChatPage() {
   const { toast } = useToast();
   const isAdmin = user?.role === "admin";
 
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
   const [online, setOnline] = useState(0);
   const [connected, setConnected] = useState(false);
   const [muted, setMuted] = useState(false);
   const [mutingLoading, setMutingLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const esRef = useRef<EventSource | null>(null);
   const sendMutation = useSendChatMessage();
 
   const { data: history, isLoading } = useGetChatMessages({ limit: 50 });
 
   useEffect(() => {
-    if (history) setMessages(history);
+    if (history) setMessages(history as ChatMsg[]);
   }, [history]);
 
   const scrollToBottom = useCallback(() => {
@@ -58,7 +62,6 @@ export default function ChatPage() {
 
     const url = `${BASE}/api/chat/stream?token=${encodeURIComponent(token)}`;
     const es = new EventSource(url);
-    esRef.current = es;
 
     es.addEventListener("connected", (e) => {
       setConnected(true);
@@ -74,8 +77,9 @@ export default function ChatPage() {
         if (data.type === "online_count") {
           setOnline(data.count);
         } else if (data.type === "chat") {
-          const msg: ChatMessage = {
+          const msg: ChatMsg = {
             id: data.id, userId: data.userId, username: data.username,
+            userRole: data.userRole ?? "user",
             message: data.message, createdAt: data.createdAt,
           };
           setMessages((prev) => {
@@ -94,7 +98,7 @@ export default function ChatPage() {
     });
 
     es.onerror = () => setConnected(false);
-    return () => { es.close(); esRef.current = null; setConnected(false); };
+    return () => { es.close(); setConnected(false); };
   }, []);
 
   const handleSend = () => {
@@ -161,7 +165,6 @@ export default function ChatPage() {
           </div>
         </div>
         <div className="flex items-center gap-3">
-          {/* Mute toggle — admin only */}
           {isAdmin && (
             <Button
               size="sm"
@@ -175,10 +178,9 @@ export default function ChatPage() {
               }`}
             >
               {muted ? <ShieldOff size={13} /> : <Shield size={13} />}
-              {muted ? "AKTIFKAN CHAT" : "NONAKTIFKAN CHAT"}
+              {muted ? "AKTIFKAN CHAT" : "NONAKTIFKAN"}
             </Button>
           )}
-
           <div className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
             <Users size={13} /><span>{online} online</span>
           </div>
@@ -217,21 +219,41 @@ export default function ChatPage() {
         )}
         {messages.map((msg) => {
           const isMe = msg.userId === user?.id;
+          const msgIsAdmin = (msg as ChatMsg).userRole === "admin";
           const color = getUserColor(msg.username);
           return (
             <div key={msg.id} className={`flex gap-2 group ${isMe ? "flex-row-reverse" : "flex-row"}`}>
+              {/* Avatar */}
               <div className={`flex-shrink-0 w-7 h-7 rounded-full border flex items-center justify-center text-xs font-bold font-mono ${
-                isMe ? "bg-primary/20 border-primary/50 text-primary" : "bg-white/5 border-white/10 " + color
+                msgIsAdmin
+                  ? "bg-amber-500/20 border-amber-500/50 text-amber-400"
+                  : isMe
+                    ? "bg-primary/20 border-primary/50 text-primary"
+                    : "bg-white/5 border-white/10 " + color
               }`}>
                 {msg.username.charAt(0).toUpperCase()}
               </div>
+
+              {/* Bubble */}
               <div className={`max-w-[70%] ${isMe ? "items-end" : "items-start"} flex flex-col gap-0.5`}>
-                <div className={`flex items-center gap-2 ${isMe ? "flex-row-reverse" : "flex-row"}`}>
-                  <span className={`font-mono text-xs font-bold ${isMe ? "text-primary" : color}`}>
+                <div className={`flex items-center gap-1.5 ${isMe ? "flex-row-reverse" : "flex-row"}`}>
+                  {/* Nama */}
+                  <span className={`font-mono text-xs font-bold ${
+                    msgIsAdmin ? "text-amber-400" : isMe ? "text-primary" : color
+                  }`}>
                     {isMe ? "Kamu" : msg.username}
                   </span>
+
+                  {/* Badge ADMIN */}
+                  {msgIsAdmin && (
+                    <span className="flex items-center gap-0.5 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-400">
+                      <Crown size={8} />ADMIN
+                    </span>
+                  )}
+
                   <span className="text-muted-foreground font-mono text-[10px]">{formatTime(msg.createdAt)}</span>
-                  {/* Delete button — admin only */}
+
+                  {/* Tombol hapus — admin only */}
                   {isAdmin && (
                     <button
                       onClick={() => handleDelete(msg.id)}
@@ -242,10 +264,13 @@ export default function ChatPage() {
                     </button>
                   )}
                 </div>
+
                 <div className={`px-3 py-2 rounded-xl text-sm font-mono break-words ${
-                  isMe
-                    ? "bg-primary/20 border border-primary/30 text-foreground rounded-tr-sm"
-                    : "bg-white/5 border border-white/10 text-foreground rounded-tl-sm"
+                  msgIsAdmin
+                    ? "bg-amber-500/10 border border-amber-500/25 text-foreground rounded-tl-sm"
+                    : isMe
+                      ? "bg-primary/20 border border-primary/30 text-foreground rounded-tr-sm"
+                      : "bg-white/5 border border-white/10 text-foreground rounded-tl-sm"
                 }`}>
                   {msg.message}
                 </div>
