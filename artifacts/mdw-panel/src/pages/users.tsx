@@ -2,8 +2,9 @@ import { useState } from "react";
 import { useListUsers, useUpdateUser, useDeleteUser, getListUsersQueryKey } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
-import { Users, Trash2, ShieldOff, Shield, Crown, Snowflake } from "lucide-react";
+import { Users, Trash2, ShieldOff, Shield, Crown, Snowflake, RotateCcw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 export default function UsersPage() {
   const qc = useQueryClient();
@@ -19,15 +20,30 @@ export default function UsersPage() {
 
   const toggleBan = (id: number, banned: boolean) => {
     updateMutation.mutate({ id, data: { banned: !banned } }, {
-      onSuccess: () => { toast({ title: banned ? "User unbanned" : "User banned" }); invalidate(); },
+      onSuccess: () => { toast({ title: banned ? "User di-unban" : "User di-ban" }); invalidate(); },
       onError: () => toast({ title: "Error", variant: "destructive" }),
     });
   };
 
   const deleteUser = (id: number) => {
     deleteMutation.mutate({ id }, {
-      onSuccess: () => { toast({ title: "User deleted" }); invalidate(); },
+      onSuccess: () => { toast({ title: "User dihapus" }); invalidate(); },
     });
+  };
+
+  const unfreezeUser = async (id: number, username: string) => {
+    try {
+      const t = localStorage.getItem("mdw_token");
+      const res = await fetch(`${BASE}/api/users/${id}/unfreeze`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${t}` },
+      });
+      if (!res.ok) throw new Error();
+      toast({ title: `✅ Peringatan & bekuan ${username} direset` });
+      invalidate();
+    } catch {
+      toast({ title: "Gagal mereset user", variant: "destructive" });
+    }
   };
 
   const getUserStatus = (u: any) => {
@@ -71,6 +87,7 @@ export default function UsersPage() {
                 {data.users.map((u: any) => {
                   const status = getUserStatus(u);
                   const isFrozen = u.frozenUntil && new Date(u.frozenUntil) > new Date();
+                  const needsReset = u.banned || isFrozen || (u.profanityCount ?? 0) > 0;
                   return (
                     <tr key={u.id} className="border-b border-border/50 hover:bg-white/[0.02] transition-colors">
                       <td className="px-4 py-3 font-mono text-xs text-muted-foreground">#{u.id}</td>
@@ -78,7 +95,7 @@ export default function UsersPage() {
                         <div className="flex items-center gap-2">
                           <span className="font-mono text-sm font-bold text-foreground">{u.username}</span>
                           {u.role === "admin" && <Crown size={13} className="text-amber-400" />}
-                          {isFrozen && <Snowflake size={13} className="text-blue-400" title={`Frozen until ${new Date(u.frozenUntil).toLocaleString("id-ID")}`} />}
+                          {isFrozen && <Snowflake size={13} className="text-blue-400" title={`Frozen hingga ${new Date(u.frozenUntil).toLocaleString("id-ID")}`} />}
                         </div>
                       </td>
                       <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{u.email}</td>
@@ -96,15 +113,17 @@ export default function UsersPage() {
                           {status.label}
                         </span>
                         {isFrozen && (
-                          <p className="text-[10px] font-mono text-blue-400/70 mt-0.5">
+                          <p className="text-[10px] font-mono text-blue-400/70 mt-0.5 whitespace-nowrap">
                             s/d {new Date(u.frozenUntil).toLocaleDateString("id-ID")}
                           </p>
                         )}
                       </td>
                       <td className="px-4 py-3">
                         <span className={`font-mono text-xs font-bold ${
-                          (u.profanityCount ?? 0) >= 2 ? "text-red-400" :
-                          (u.profanityCount ?? 0) >= 1 ? "text-amber-400" : "text-muted-foreground"
+                          (u.profanityCount ?? 0) >= 3 ? "text-red-400" :
+                          (u.profanityCount ?? 0) >= 2 ? "text-amber-400" :
+                          (u.profanityCount ?? 0) >= 1 ? "text-yellow-400" :
+                          "text-muted-foreground"
                         }`}>
                           {u.profanityCount ?? 0}/3
                         </span>
@@ -113,20 +132,36 @@ export default function UsersPage() {
                         {new Date(u.createdAt).toLocaleDateString("id-ID")}
                       </td>
                       <td className="px-4 py-3">
-                        <div className="flex gap-1">
-                          <button onClick={() => toggleBan(u.id, u.banned ?? false)}
-                            title={u.banned ? "Unban" : "Ban"}
-                            className={`p-1 rounded transition-colors ${
-                              u.banned
-                                ? "text-green-400 hover:bg-green-500/10"
-                                : "text-amber-400 hover:bg-amber-500/10"
-                            }`}>
-                            {u.banned ? <Shield size={14} /> : <ShieldOff size={14} />}
-                          </button>
-                          <button onClick={() => deleteUser(u.id)} title="Delete"
-                            className="p-1 text-red-400 hover:bg-red-500/10 rounded transition-colors">
-                            <Trash2 size={14} />
-                          </button>
+                        <div className="flex gap-1 items-center">
+                          {/* Reset / Unfreeze */}
+                          {needsReset && u.role !== "admin" && (
+                            <button
+                              onClick={() => unfreezeUser(u.id, u.username)}
+                              title="Reset peringatan & bekuan"
+                              className="p-1 text-cyan-400 hover:bg-cyan-500/10 rounded transition-colors"
+                            >
+                              <RotateCcw size={14} />
+                            </button>
+                          )}
+                          {/* Ban/Unban */}
+                          {u.role !== "admin" && (
+                            <button onClick={() => toggleBan(u.id, u.banned ?? false)}
+                              title={u.banned ? "Unban" : "Ban"}
+                              className={`p-1 rounded transition-colors ${
+                                u.banned
+                                  ? "text-green-400 hover:bg-green-500/10"
+                                  : "text-amber-400 hover:bg-amber-500/10"
+                              }`}>
+                              {u.banned ? <Shield size={14} /> : <ShieldOff size={14} />}
+                            </button>
+                          )}
+                          {/* Delete */}
+                          {u.role !== "admin" && (
+                            <button onClick={() => deleteUser(u.id)} title="Hapus"
+                              className="p-1 text-red-400 hover:bg-red-500/10 rounded transition-colors">
+                              <Trash2 size={14} />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>

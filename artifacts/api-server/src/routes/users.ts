@@ -15,6 +15,8 @@ function serializeUser(u: typeof usersTable.$inferSelect) {
     email: u.email,
     role: u.role,
     banned: u.banned,
+    profanityCount: u.profanityCount ?? 0,
+    frozenUntil: u.frozenUntil ? u.frozenUntil.toISOString() : null,
     createdAt: u.createdAt.toISOString(),
   };
 }
@@ -77,6 +79,24 @@ router.patch("/users/:id", requireAdmin, async (req, res) => {
     res.json(serializeUser(updated));
   } catch (err) {
     req.log.error({ err }, "Update user error");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ─── Reset peringatan & bekuan akun (admin only) ──────────────
+router.post("/users/:id/unfreeze", requireAdmin, async (req, res) => {
+  const id = parseInt(req.params.id as string);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid id" }); return; }
+
+  try {
+    const [updated] = await db.update(usersTable)
+      .set({ profanityCount: 0, frozenUntil: null, banned: false })
+      .where(eq(usersTable.id, id))
+      .returning();
+    if (!updated) { res.status(404).json({ error: "User not found" }); return; }
+    res.json({ success: true, user: serializeUser(updated) });
+  } catch (err) {
+    req.log.error({ err }, "Unfreeze user error");
     res.status(500).json({ error: "Internal server error" });
   }
 });
