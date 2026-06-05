@@ -13,6 +13,10 @@ const JWT_SECRET = process.env.SESSION_SECRET ?? "mdw-panel-secret-key";
 const clients = new Map<string, Response>();
 let clientIdCounter = 0;
 
+// Cooldown 5 detik per user (userId → timestamp terakhir kirim)
+const lastMessageTime = new Map<number, number>();
+const COOLDOWN_MS = 5000;
+
 function broadcast(data: unknown) {
   const payload = `event: message\ndata: ${JSON.stringify(data)}\n\n`;
   for (const res of clients.values()) {
@@ -98,6 +102,15 @@ router.post("/chat/messages", requireAuth, async (req: AuthRequest, res) => {
 
   // Admin tidak kena batasan
   if (user.role !== "admin") {
+    // Cek cooldown 5 detik
+    const last = lastMessageTime.get(user.id) ?? 0;
+    const elapsed = Date.now() - last;
+    if (elapsed < COOLDOWN_MS) {
+      const remaining = Math.ceil((COOLDOWN_MS - elapsed) / 1000);
+      res.status(429).json({ error: `Tunggu ${remaining} detik sebelum kirim pesan lagi`, remaining });
+      return;
+    }
+
     // Cek chat muted
     const muted = await isChatMuted();
     if (muted) {
@@ -170,6 +183,9 @@ router.post("/chat/messages", requireAuth, async (req: AuthRequest, res) => {
     message: msg.message,
     createdAt: msg.createdAt.toISOString(),
   };
+
+  // Catat waktu terakhir kirim untuk cooldown
+  lastMessageTime.set(user.id, Date.now());
 
   broadcast({ type: "chat", ...out });
   res.status(201).json(out);

@@ -1,65 +1,70 @@
-// Daftar kata kotor multi-bahasa (Indonesia, Inggris, dll)
+// Daftar kata kotor — hanya kata lengkap yang dicocokkan (whole-word match)
+// Tidak boleh ada kata pendek yang jadi substring dari kata biasa
 const PROFANITY_LIST = [
-  // Indonesia & daerah
-  "anjing","anjir","anj","bangsat","babi","bajingan","goblok","tolol","idiot",
-  "bodoh","kampret","keparat","tai","kontol","memek","jancok","cok","jancuk",
-  "dancuk","asu","celeng","brengsek","bedebah","setan","iblis","sialan",
-  "ngentot","entot","ngewe","pepek","titit","bacot","mampus","matamu",
-  "tempik","puki","pukimak","kimak","lancau","sundal","pelacur","jalang",
-  "lonte","bejat","monyet","bajigur","coblo","sempak","blo'on","dongok",
-  "berengsek","kurang ajar","keparat","brengsek","sial","tetek","pantat",
+  // Indonesia — kata kasar jelas, hindari yang jadi substring kata umum
+  "anjing","anjir","bangsat","babi","bajingan","goblok","tolol","bodoh",
+  "kampret","keparat","kontol","memek","jancok","jancuk","dancuk","sialan",
+  "ngentot","entot","ngewe","pepek","titit","mampus","tempik","puki",
+  "pukimak","kimak","lancau","sundal","pelacur","jalang","lonte","bejat",
+  "monyet","bajigur","brengsek","berengsek","kurang ajar","setan","iblis",
+  "bacot","matamu","celeng","goblog","blegug","tetek","pantat",
+  "jembut","peler","taek",
   // Jawa
-  "jancuk","jancok","dancuk","jangkrik","asu","celeng","bajingan","pukimai",
-  "matane","taek","jembut","peler",
-  // Sunda
-  "sia","maneh","goblog","belegug","heureuy",
-  // Inggris
-  "fuck","f*ck","fck","fuuck","shit","sh*t","bitch","b*tch","bastard",
-  "asshole","ass","a**","cunt","c*nt","dick","d*ck","pussy","p*ssy",
-  "whore","slut","nigga","nigger","fag","faggot","retard","stupid",
-  "idiot","moron","dumbass","motherfucker","mf","wtf","stfu","damn",
-  "hell","crap","piss","cock","bollocks",
+  "matane","pukimai",
+  // Inggris — hindari yang terlalu pendek
+  "fuck","fck","shit","bitch","bastard","asshole","cunt","pussy",
+  "whore","slut","nigga","nigger","faggot","retard","dumbass",
+  "motherfucker","bullshit","jackass","dickhead","shithead",
   // Spanyol
-  "puta","mierda","joder","coño","pendejo","cabron","chinga","hostia",
+  "puta","mierda","joder","pendejo","cabron","chinga","hostia",
   // Portugis
-  "merda","porra","foda","caralho","buceta","viado","puta",
-  // Arab
-  "كس","طيز","شرموط","عرص","كلب","حمار","منيوك",
-  // Mandarin (pinyin)
-  "cao","tamade","shabi","hundan","wocao","niubi",
+  "merda","porra","caralho","buceta","viado",
   // Prancis
   "merde","putain","connard","salope","bordel","enculer",
   // Jerman
   "scheiße","scheisse","arschloch","wichser","hurensohn","fotze","schlampe",
   // Rusia (latin)
-  "blyad","pizda","huy","ebat","suka","pizdec","blya",
-  // Jepang (romaji)
-  "kuso","chikushо","baka","aho","shine",
+  "blyad","pizda","ebat","pizdec",
   // Korea (latin)
-  "sibal","ssibal","byeong","gaesekki","jiral",
-  // Melayu
-  "pukimak","celaka","sial","babi","pundi","pucuk","cipap",
+  "sibal","ssibal","gaesekki",
+  // Arab (latin)
+  "sharmouta","kuss","kossomak",
 ];
 
-// Normalisasi teks: hapus spasi & karakter khusus, lowercase
+// Normalisasi: lowercase, ganti karakter l33tspeak umum
 function normalize(text: string): string {
   return text
     .toLowerCase()
-    .replace(/[*@#$!0-9]/g, (c) => ({
-      "*": "", "@": "a", "#": "h", "$": "s", "!": "i",
-      "0": "o", "1": "i", "3": "e", "4": "a", "5": "s",
-    }[c] ?? ""))
-    .replace(/\s+/g, " ")
+    .replace(/[@]/g, "a")
+    .replace(/[3]/g, "e")
+    .replace(/[1!]/g, "i")
+    .replace(/[0]/g, "o")
+    .replace(/[5$]/g, "s")
+    .replace(/[7]/g, "t")
     .trim();
 }
 
+// Pisahkan teks jadi kata-kata (split by non-alphanumeric)
+function tokenize(text: string): string[] {
+  return normalize(text).split(/[^a-z0-9]+/).filter(Boolean);
+}
+
 export function containsProfanity(message: string): boolean {
-  const normalized = normalize(message);
-  const words = normalized.split(/\s+/);
+  const words = tokenize(message);
+  const fullNorm = normalize(message);
+
   for (const bad of PROFANITY_LIST) {
     const normalBad = normalize(bad);
-    if (normalized.includes(normalBad)) return true;
-    if (words.some(w => w === normalBad)) return true;
+
+    // Multi-kata (misal "kurang ajar") — cek di teks penuh
+    if (bad.includes(" ")) {
+      if (fullNorm.includes(normalBad)) return true;
+      continue;
+    }
+
+    // Kata tunggal — hanya cocok jika persis sama dengan salah satu token
+    if (words.includes(normalBad)) return true;
   }
+
   return false;
 }

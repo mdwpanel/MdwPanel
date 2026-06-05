@@ -41,6 +41,8 @@ export default function ChatPage() {
   const [connected, setConnected] = useState(false);
   const [muted, setMuted] = useState(false);
   const [mutingLoading, setMutingLoading] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
+  const cooldownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const sendMutation = useSendChatMessage();
 
@@ -101,15 +103,37 @@ export default function ChatPage() {
     return () => { es.close(); setConnected(false); };
   }, []);
 
+  const startCooldown = (seconds: number) => {
+    if (cooldownRef.current) clearInterval(cooldownRef.current);
+    setCooldown(seconds);
+    cooldownRef.current = setInterval(() => {
+      setCooldown((prev) => {
+        if (prev <= 1) {
+          clearInterval(cooldownRef.current!);
+          cooldownRef.current = null;
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+
   const handleSend = () => {
     const text = input.trim();
-    if (!text || sendMutation.isPending) return;
+    if (!text || sendMutation.isPending || cooldown > 0) return;
     setInput("");
     sendMutation.mutate(
       { data: { message: text } },
       {
+        onSuccess: () => {
+          if (!isAdmin) startCooldown(5);
+        },
         onError: (err: any) => {
-          const msg = err?.response?.data?.error ?? "Gagal mengirim pesan";
+          const errData = (err as any)?.response?.data;
+          const msg = errData?.error ?? "Gagal mengirim pesan";
+          if (errData?.remaining) {
+            startCooldown(errData.remaining);
+          }
           toast({ title: msg, variant: "destructive" });
           setInput(text);
         },
@@ -151,7 +175,7 @@ export default function ChatPage() {
     }
   };
 
-  const canSend = connected && !sendMutation.isPending && (isAdmin || !muted);
+  const canSend = connected && !sendMutation.isPending && cooldown === 0 && (isAdmin || !muted);
 
   return (
     <div className="flex flex-col h-[calc(100vh-140px)] max-h-[800px]">
@@ -299,10 +323,16 @@ export default function ChatPage() {
         <Button
           onClick={handleSend}
           disabled={!input.trim() || !canSend}
-          className="font-mono bg-primary text-primary-foreground hover:bg-primary/90 neon-border px-4"
+          className={`font-mono px-4 min-w-[52px] transition-all ${
+            cooldown > 0
+              ? "bg-muted text-muted-foreground border border-border cursor-not-allowed"
+              : "bg-primary text-primary-foreground hover:bg-primary/90 neon-border"
+          }`}
         >
           {sendMutation.isPending ? (
             <div className="w-4 h-4 border-2 border-primary-foreground/40 border-t-primary-foreground rounded-full animate-spin" />
+          ) : cooldown > 0 ? (
+            <span className="text-sm font-bold tabular-nums">{cooldown}s</span>
           ) : (
             <Send size={16} />
           )}
@@ -310,6 +340,9 @@ export default function ChatPage() {
       </div>
       <p className="text-muted-foreground font-mono text-[10px] mt-1 text-right">
         {input.length}/500 · Enter untuk kirim
+        {cooldown > 0 && !isAdmin && (
+          <span className="text-amber-400 ml-2">· Tunggu {cooldown}s</span>
+        )}
       </p>
     </div>
   );
