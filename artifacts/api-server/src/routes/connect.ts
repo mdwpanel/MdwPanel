@@ -1,8 +1,9 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { keysTable, activityLogsTable } from "@workspace/db";
+import { keysTable, activityLogsTable, usersTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import crypto from "crypto";
+import { generateToken } from "../middlewares/auth";
 
 const router = Router();
 
@@ -11,7 +12,7 @@ const router = Router();
 // bValid = (server_token == CalcMD5(game + "-" + user_key + "-" + UUID + "-" + secret))
 const TOKEN_SECRET = "Vm8Lk7Uj2JmsjCPVPVjrLa7zgfx3uz9E";
 
-function generateToken(game: string, key: string, serial: string): string {
+function generateMD5Token(game: string, key: string, serial: string): string {
   return crypto.createHash("md5").update(`${game}-${key}-${serial}-${TOKEN_SECRET}`).digest("hex");
 }
 
@@ -43,13 +44,8 @@ router.post("/connect", async (req, res) => {
 
     if (!keys.length) {
       await db.insert(activityLogsTable).values({
-        action: "connect",
-        key: user_key,
-        game,
-        success: false,
-        ipAddress: ip,
-        hwid: serial || null,
-        reason: "Invalid key",
+        action: "connect", key: user_key, game, success: false,
+        ipAddress: ip, hwid: serial || null, reason: "Invalid key",
       });
       res.json({ status: false, reason: "Invalid key" });
       return;
@@ -59,13 +55,8 @@ router.post("/connect", async (req, res) => {
 
     if (keyRecord.status === "banned") {
       await db.insert(activityLogsTable).values({
-        action: "connect",
-        key: user_key,
-        game,
-        success: false,
-        ipAddress: ip,
-        hwid: serial || null,
-        reason: "Key has been banned",
+        action: "connect", key: user_key, game, success: false,
+        ipAddress: ip, hwid: serial || null, reason: "Key has been banned",
       });
       res.json({ status: false, reason: "Key has been banned" });
       return;
@@ -73,13 +64,8 @@ router.post("/connect", async (req, res) => {
 
     if (keyRecord.status === "expired") {
       await db.insert(activityLogsTable).values({
-        action: "connect",
-        key: user_key,
-        game,
-        success: false,
-        ipAddress: ip,
-        hwid: serial || null,
-        reason: "Key has expired",
+        action: "connect", key: user_key, game, success: false,
+        ipAddress: ip, hwid: serial || null, reason: "Key has expired",
       });
       res.json({ status: false, reason: "Key has expired" });
       return;
@@ -88,13 +74,8 @@ router.post("/connect", async (req, res) => {
     if (keyRecord.expiresAt && keyRecord.expiresAt < new Date()) {
       await db.update(keysTable).set({ status: "expired" }).where(eq(keysTable.id, keyRecord.id));
       await db.insert(activityLogsTable).values({
-        action: "connect",
-        key: user_key,
-        game,
-        success: false,
-        ipAddress: ip,
-        hwid: serial || null,
-        reason: "Key has expired",
+        action: "connect", key: user_key, game, success: false,
+        ipAddress: ip, hwid: serial || null, reason: "Key has expired",
       });
       res.json({ status: false, reason: "Key has expired" });
       return;
@@ -102,13 +83,8 @@ router.post("/connect", async (req, res) => {
 
     if (keyRecord.hwid && serial && keyRecord.hwid !== serial) {
       await db.insert(activityLogsTable).values({
-        action: "connect",
-        key: user_key,
-        game,
-        success: false,
-        ipAddress: ip,
-        hwid: serial,
-        reason: "HWID mismatch",
+        action: "connect", key: user_key, game, success: false,
+        ipAddress: ip, hwid: serial, reason: "HWID mismatch",
       });
       res.json({ status: false, reason: "HWID mismatch — key is bound to another device" });
       return;
@@ -121,19 +97,35 @@ router.post("/connect", async (req, res) => {
     await db.update(keysTable).set({ lastUsedAt: new Date() }).where(eq(keysTable.id, keyRecord.id));
 
     const rng = Math.floor(Date.now() / 1000);
-    const token = generateToken(game, user_key, serial);
+    const token = generateMD5Token(game, user_key, serial);
     const exp = keyRecord.expiresAt
       ? keyRecord.expiresAt.toISOString().split("T")[0]
       : new Date(Date.now() + keyRecord.duration * 86400000).toISOString().split("T")[0];
 
+    // ─── Generate JWT chat_token berdasarkan user pemilik key ──
+    let chat_token: string | null = null;
+    let chat_username: string | null = null;
+    let chat_role: string | null = null;
+
+    if (keyRecord.userId) {
+      const users = await db.select({
+        id: usersTable.id,
+        username: usersTable.username,
+        role: usersTable.role,
+        banned: usersTable.banned,
+        frozenUntil: usersTable.frozenUntil,
+      }).from(usersTable).where(eq(usersTable.id, keyRecord.userId)).limit(1);
+
+      if (users.length && !users[0].banned) {
+        chat_token = generateToken(users[0].id);
+        chat_username = users[0].username;
+        chat_role = users[0].role;
+      }
+    }
+
     await db.insert(activityLogsTable).values({
-      action: "connect",
-      key: user_key,
-      game,
-      success: true,
-      ipAddress: ip,
-      hwid: serial || null,
-      reason: null,
+      action: "connect", key: user_key, game, success: true,
+      ipAddress: ip, hwid: serial || null, reason: null,
     });
 
     res.json({
@@ -142,6 +134,10 @@ router.post("/connect", async (req, res) => {
         token,
         rng,
         EXP: exp,
+        // ← Token baru untuk chat API (JWT berdasarkan user pemilik key)
+        chat_token,
+        chat_username,
+        chat_role,
       },
     });
   } catch (err) {
